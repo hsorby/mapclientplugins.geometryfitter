@@ -2,13 +2,16 @@
 User interface for github.com/ABI-Software/scaffoldfitter
 """
 from PySide2 import QtCore, QtGui, QtWidgets
+from opencmiss.zincwidgets.handlers.modelalignment import ModelAlignment
 
 from mapclientplugins.geometricfitstep.utils.zinc_utils import field_is_managed_real_1_to_3_components
 from mapclientplugins.geometricfitstep.view.ui_geometricfitwidget import Ui_GeometricFitWidget
-from opencmiss.maths.vectorops import dot, magnitude, mult, normalize, sub
 
+from opencmiss.maths.vectorops import dot, magnitude, mult, normalize, sub
 from opencmiss.utils.zinc.field import field_is_managed_coordinates, field_is_managed_group
 from opencmiss.zinc.field import Field
+from opencmiss.zincwidgets.handlers.scenemanipulation import SceneManipulation
+
 from scaffoldfitter.fitterstepalign import FitterStepAlign
 from scaffoldfitter.fitterstepconfig import FitterStepConfig
 from scaffoldfitter.fitterstepfit import FitterStepFit
@@ -21,7 +24,7 @@ def QLineEdit_parseVector3(lineedit):
     """
     try:
         text = lineedit.text()
-        values = [ float(value) for value in text.split(",") ]
+        values = [float(value) for value in text.split(",")]
         if len(values) == 3:
             return values
     except:
@@ -36,7 +39,7 @@ def QLineEdit_parseVectors(lineedit):
     """
     try:
         text = lineedit.text()
-        values = [ float(value) for value in text.split(",") ]
+        values = [float(value) for value in text.split(",")]
         return values
     except:
         pass
@@ -62,13 +65,19 @@ class GeometricFitWidget(QtWidgets.QWidget):
     """
 
     def __init__(self, model, parent=None):
-        """
-        """
         super(GeometricFitWidget, self).__init__(parent)
         self._ui = Ui_GeometricFitWidget()
         self._ui.setupUi(self)
         self._ui.alignmentsceneviewerwidget.setContext(model.getContext())
         self._ui.alignmentsceneviewerwidget.setModel(model)
+
+        base_handler = SceneManipulation()
+        self._ui.basesceneviewerwidget.register_handler(base_handler)
+        align_handler = ModelAlignment(QtCore.Qt.Key_A)
+        align_handler.set_model(model)
+        self._ui.basesceneviewerwidget.register_handler(align_handler)
+        self._ui.basesceneviewerwidget.set_context(model.getContext())
+
         self._model = model
         self._fitter = self._model.getFitter()
         self._region = self._fitter.getRegion()
@@ -89,7 +98,6 @@ class GeometricFitWidget(QtWidgets.QWidget):
         self._sceneChanged()
         sceneviewer = self._ui.alignmentsceneviewerwidget.getSceneviewer()
         if sceneviewer is not None:
-            print('graphics init: ', self._ui.alignmentsceneviewerwidget.size())
             sceneviewer.setTransparencyMode(sceneviewer.TRANSPARENCY_MODE_SLOW)
             self._autoPerturbLines()
             sceneviewer.viewAll()
@@ -98,14 +106,17 @@ class GeometricFitWidget(QtWidgets.QWidget):
         """
         Set custom scene from model.
         """
+        self._model.createGraphics()
+
         sceneviewer = self._ui.alignmentsceneviewerwidget.getSceneviewer()
         if sceneviewer is not None:
-            self._model.createGraphics()
             sceneviewer.setScene(self._model.getScene())
             self._refreshGraphics()
             groupName = self._getGroupSettingsGroupName()
             if groupName:
                 self._model.setSelectHighlightGroupByName(groupName)
+
+        self._ui.basesceneviewerwidget.set_scene(self._model.getScene())
 
     def _refreshGraphics(self):
         """
@@ -133,7 +144,7 @@ class GeometricFitWidget(QtWidgets.QWidget):
         if sceneviewer is not None:
             sceneviewer.setPerturbLinesFlag(self._model.needPerturbLines())
 
-# === general widgets ===
+    # === general widgets ===
 
     def _makeConnectionsGeneral(self):
         self._ui.stepsAddAlign_pushButton.clicked.connect(self._stepsAddAlignClicked)
@@ -212,8 +223,8 @@ class GeometricFitWidget(QtWidgets.QWidget):
         item = model.itemFromIndex(modelIndex)
         step = item.data()
         if step != self._currentFitterStep:
-           self._currentFitterStep = step
-           self._updateFitterStepWidgets()
+            self._currentFitterStep = step
+            self._updateFitterStepWidgets()
         isInitialConfig = step is self._fitter.getInitialFitterStepConfig()
         isChecked = True if isInitialConfig else (item.checkState() == QtCore.Qt.Checked)
         if step.hasRun() != isChecked:
@@ -280,8 +291,10 @@ class GeometricFitWidget(QtWidgets.QWidget):
         isAlign = isinstance(self._currentFitterStep, FitterStepAlign)
         isConfig = isinstance(self._currentFitterStep, FitterStepConfig)
         isFit = isinstance(self._currentFitterStep, FitterStepFit)
+        self._model.setStateAlign(False)
         if isAlign:
             self._updateAlignWidgets()
+            self._model.setStateAlign(True)
         elif isConfig:
             self._updateConfigWidgets()
         elif isFit:
@@ -306,31 +319,32 @@ class GeometricFitWidget(QtWidgets.QWidget):
             viewVector = sub(lookatPosition, eyePosition)
             viewDistance = magnitude(viewVector)
             viewVector = normalize(viewVector)
-            viewX = dot(viewVector, [ 1.0, 0.0, 0.0 ])
-            viewY = dot(viewVector, [ 0.0, 1.0, 0.0 ])
-            viewZ = dot(viewVector, [ 0.0, 0.0, 1.0 ])
-            upX = dot(upVector, [ 1.0, 0.0, 0.0 ])
-            upY = dot(upVector, [ 0.0, 1.0, 0.0 ])
-            upZ = dot(upVector, [ 0.0, 0.0, 1.0 ])
+            viewX = dot(viewVector, [1.0, 0.0, 0.0])
+            viewY = dot(viewVector, [0.0, 1.0, 0.0])
+            viewZ = dot(viewVector, [0.0, 0.0, 1.0])
+            upX = dot(upVector, [1.0, 0.0, 0.0])
+            upY = dot(upVector, [0.0, 1.0, 0.0])
+            upZ = dot(upVector, [0.0, 0.0, 1.0])
             if (viewZ < -0.999) and (upY > 0.999):
                 # XY -> XZ
-                viewVector = [ 0.0, 1.0, 0.0 ]
-                upVector = [ 0.0, 0.0, 1.0 ]
+                viewVector = [0.0, 1.0, 0.0]
+                upVector = [0.0, 0.0, 1.0]
             elif (viewY > 0.999) and (upZ > 0.999):
                 # XZ -> YZ
-                viewVector = [ -1.0, 0.0, 0.0 ]
-                upVector = [ 0.0, 0.0, 1.0 ]
+                viewVector = [-1.0, 0.0, 0.0]
+                upVector = [0.0, 0.0, 1.0]
             else:
                 # XY
-                viewVector = [ 0.0, 0.0, -1.0 ]
-                upVector = [ 0.0, 1.0, 0.0 ]
+                viewVector = [0.0, 0.0, -1.0]
+                upVector = [0.0, 1.0, 0.0]
             eyePosition = sub(lookatPosition, mult(viewVector, viewDistance))
             sceneviewer.setLookatParametersNonSkew(eyePosition, lookatPosition, upVector)
 
     def _viewAllButtonClicked(self):
         self._ui.alignmentsceneviewerwidget.viewAll()
+        self._ui.basesceneviewerwidget.view_all()
 
-# === display widgets ===
+    # === display widgets ===
 
     def _makeConnectionsDisplay(self):
         self._ui.displayAxes_checkBox.clicked.connect(self._displayAxesClicked)
@@ -477,7 +491,7 @@ class GeometricFitWidget(QtWidgets.QWidget):
     def _displaySurfacesWireframeClicked(self):
         self._model.setDisplaySurfacesWireframe(self._ui.displaySurfacesWireframe_checkBox.isChecked())
 
-# === group setting widgets ===
+    # === group setting widgets ===
 
     def _setupGroupSettingWidgets(self):
         """
@@ -505,7 +519,7 @@ class GeometricFitWidget(QtWidgets.QWidget):
         """
         Update and display group setting widgets for currentFitterStep
         """
-        #isAlign = isinstance(self._currentFitterStep, FitterStepAlign)
+        # isAlign = isinstance(self._currentFitterStep, FitterStepAlign)
         isConfig = isinstance(self._currentFitterStep, FitterStepConfig)
         isFit = isinstance(self._currentFitterStep, FitterStepFit)
         if isConfig:
@@ -561,12 +575,12 @@ class GeometricFitWidget(QtWidgets.QWidget):
         if isLocallySet:
             checkBoxState = QtCore.Qt.Checked
             lineEditDisable = False
-        return checkBoxTristate,checkBoxState,lineEditDisable,data
+        return checkBoxTristate, checkBoxState, lineEditDisable, data
 
     def _updateGroupConfigCentralProjection(self):
-        checkBoxTristate,checkBoxState,lineEditDisable,isCentralProjection = self._getGroupSettingDisplayState(self._getConfig().getGroupCentralProjection)
+        checkBoxTristate, checkBoxState, lineEditDisable, isCentralProjection = self._getGroupSettingDisplayState(self._getConfig().getGroupCentralProjection)
         self._ui.groupConfigCentralProjection_checkBox.setTristate(checkBoxTristate)
-        self._ui.groupConfigCentralProjection_checkBox.setCheckState(checkBoxState)        
+        self._ui.groupConfigCentralProjection_checkBox.setCheckState(checkBoxState)
         self._ui.groupConfigSetCentralProjection_checkBox.setDisabled(lineEditDisable)
         self._ui.groupConfigSetCentralProjection_checkBox.setCheckState(QtCore.Qt.Checked if isCentralProjection else QtCore.Qt.Unchecked)
 
@@ -585,7 +599,7 @@ class GeometricFitWidget(QtWidgets.QWidget):
         state = self._ui.groupConfigSetCentralProjection_checkBox.checkState()
         config = self._getConfig()
         groupName = self._getGroupSettingsGroupName()
-        if config.setGroupCentralProjection(groupName,state == QtCore.Qt.Checked):
+        if config.setGroupCentralProjection(groupName, state == QtCore.Qt.Checked):
             fitterSteps = self._fitter.getFitterSteps()
             index = fitterSteps.index(config)
             if config.hasRun() and (((index + 1) == len(fitterSteps)) or (not fitterSteps[index + 1].hasRun())):
@@ -594,9 +608,9 @@ class GeometricFitWidget(QtWidgets.QWidget):
                 self._refreshGraphics()
 
     def _updateGroupConfigDataProportion(self):
-        checkBoxTristate,checkBoxState,lineEditDisable,dataProportionStr = self._getGroupSettingDisplayState(self._getConfig().getGroupDataProportion)
+        checkBoxTristate, checkBoxState, lineEditDisable, dataProportionStr = self._getGroupSettingDisplayState(self._getConfig().getGroupDataProportion)
         self._ui.groupConfigDataProportion_checkBox.setTristate(checkBoxTristate)
-        self._ui.groupConfigDataProportion_checkBox.setCheckState(checkBoxState)        
+        self._ui.groupConfigDataProportion_checkBox.setCheckState(checkBoxState)
         self._ui.groupConfigDataProportion_lineEdit.setDisabled(lineEditDisable)
         self._ui.groupConfigDataProportion_lineEdit.setText(dataProportionStr)
 
@@ -621,7 +635,7 @@ class GeometricFitWidget(QtWidgets.QWidget):
         self._updateGroupConfigDataProportion()
 
     def _updateGroupFitDataWeight(self):
-        checkBoxTristate,checkBoxState,lineEditDisable,dataWeightStr = self._getGroupSettingDisplayState(self._getFit().getGroupDataWeight)
+        checkBoxTristate, checkBoxState, lineEditDisable, dataWeightStr = self._getGroupSettingDisplayState(self._getFit().getGroupDataWeight)
         self._ui.groupFitDataWeight_checkBox.setTristate(checkBoxTristate)
         self._ui.groupFitDataWeight_checkBox.setCheckState(checkBoxState)
         self._ui.groupFitDataWeight_lineEdit.setDisabled(lineEditDisable)
@@ -648,9 +662,9 @@ class GeometricFitWidget(QtWidgets.QWidget):
         self._updateGroupFitDataWeight()
 
     def _updateGroupFitStrainPenalty(self):
-        checkBoxTristate,checkBoxState,lineEditDisable,dataStr = self._getGroupSettingDisplayState(self._getFit().getGroupStrainPenalty)
+        checkBoxTristate, checkBoxState, lineEditDisable, dataStr = self._getGroupSettingDisplayState(self._getFit().getGroupStrainPenalty)
         self._ui.groupFitStrainPenalty_checkBox.setTristate(checkBoxTristate)
-        self._ui.groupFitStrainPenalty_checkBox.setCheckState(checkBoxState)        
+        self._ui.groupFitStrainPenalty_checkBox.setCheckState(checkBoxState)
         self._ui.groupFitStrainPenalty_lineEdit.setDisabled(lineEditDisable)
         self._ui.groupFitStrainPenalty_lineEdit.setText(dataStr)
 
@@ -672,7 +686,7 @@ class GeometricFitWidget(QtWidgets.QWidget):
         self._updateGroupFitStrainPenalty()
 
     def _updateGroupFitCurvaturePenalty(self):
-        checkBoxTristate,checkBoxState,lineEditDisable,dataStr = self._getGroupSettingDisplayState(self._getFit().getGroupCurvaturePenalty)
+        checkBoxTristate, checkBoxState, lineEditDisable, dataStr = self._getGroupSettingDisplayState(self._getFit().getGroupCurvaturePenalty)
         self._ui.groupFitCurvaturePenalty_checkBox.setTristate(checkBoxTristate)
         self._ui.groupFitCurvaturePenalty_checkBox.setCheckState(checkBoxState)
         self._ui.groupFitCurvaturePenalty_lineEdit.setDisabled(lineEditDisable)
@@ -695,7 +709,7 @@ class GeometricFitWidget(QtWidgets.QWidget):
         self._getFit().setGroupCurvaturePenalty(groupName, value)
         self._updateGroupFitCurvaturePenalty()
 
-# === config widgets ===
+    # === config widgets ===
 
     def _setupConfigWidgets(self):
         """
@@ -773,7 +787,7 @@ class GeometricFitWidget(QtWidgets.QWidget):
     def _configDiagnosticLevelValueChanged(self, value):
         self._fitter.setDiagnosticLevel(value)
 
-# === align widgets ===
+    # === align widgets ===
 
     def _makeConnectionsAlign(self):
         self._ui.alignGroups_checkBox.clicked.connect(self._alignGroupsClicked)
@@ -831,7 +845,7 @@ class GeometricFitWidget(QtWidgets.QWidget):
             print("Invalid model translation entered")
         self._updateAlignWidgets()
 
-# === fit widgets ===
+    # === fit widgets ===
 
     def _makeConnectionsFit(self):
         self._ui.fitIterations_spinBox.valueChanged.connect(self._fitIterationsValueChanged)

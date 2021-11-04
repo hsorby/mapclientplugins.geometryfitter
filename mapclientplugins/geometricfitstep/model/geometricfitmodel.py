@@ -33,6 +33,7 @@ class GeometricFitModel(object):
         # self._fitter.setDiagnosticLevel(1)
         self._location = os.path.join(location, identifier)
         self._identifier = identifier
+        self._mode_align = False
         self._initGraphicsModules()
         self._settings = {
             "displayAxes": True,
@@ -59,6 +60,7 @@ class GeometricFitModel(object):
         }
         self._loadSettings()
         self._fitter.load()
+        self._currentFitterStep = self._fitter.getInitialFitterStepConfig()  # always exists
 
     def _initGraphicsModules(self):
         context = self._fitter.getContext()
@@ -688,7 +690,10 @@ class GeometricFitModel(object):
     # === Align Utilities ===
 
     def isStateAlign(self):
-        return False  # disabled as not implemented
+        return self._mode_align  # disabled as not implemented
+
+    def setStateAlign(self, state):
+        self._mode_align = state
 
     def rotateModel(self, axis, angle):
         mat1 = axis_angle_to_rotation_matrix(axis, angle)
