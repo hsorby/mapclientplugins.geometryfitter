@@ -81,7 +81,10 @@ class GeometricFitWidget(QtWidgets.QWidget):
         self._model.setAlignmentChangeCallback(self._alignment_changed)
         self._region = model.getFitter().getRegion()
         self._scene = self._region.getScene()
-        self._ui.alignmentsceneviewerwidget.graphicsInitialized.connect(self._graphicsInitialized)
+
+        self._stepsItems = QtGui.QStandardItemModel()
+        self._ui.steps_listView.setModel(self._stepsItems)
+
         self._callback = None
         self._setupConfigWidgets()
         self._setupGroupSettingWidgets()
@@ -145,6 +148,7 @@ class GeometricFitWidget(QtWidgets.QWidget):
     # === general widgets ===
 
     def _makeConnectionsGeneral(self):
+        self._ui.alignmentsceneviewerwidget.graphicsInitialized.connect(self._graphicsInitialized)
         self._ui.stepsAddAlign_pushButton.clicked.connect(self._stepsAddAlignClicked)
         self._ui.stepsAddConfig_pushButton.clicked.connect(self._stepsAddConfigClicked)
         self._ui.stepsAddFit_pushButton.clicked.connect(self._stepsAddFitClicked)
@@ -154,11 +158,7 @@ class GeometricFitWidget(QtWidgets.QWidget):
         self._ui.stdViews_pushButton.clicked.connect(self._stdViewsButtonClicked)
         self._ui.viewAll_pushButton.clicked.connect(self._viewAllButtonClicked)
         selection_model = self._ui.steps_listView.selectionModel()
-        print(selection_model)
-        print(dir(selection_model.selectionChanged))
-
-        selection_model.selectionChanged[QtCore.QItemSelection, QtCore.QItemSelection].connect(self._stepSelectionChanged)
-        selection_model.currentRowChanged[QtCore.QModelIndex, QtCore.QModelIndex].connect(self._stepSelectionChanged)
+        selection_model.currentRowChanged.connect(self._stepSelectionChanged)
 
     def _updateGeneralWidgets(self):
         self._ui.identifier_label.setText("Identifier:  " + self._model.getIdentifier())
@@ -169,21 +169,33 @@ class GeometricFitWidget(QtWidgets.QWidget):
         Add a new align step.
         """
         self._model.addAlignStep()
-        self._buildStepsList()
+        self._addStepToModel()
 
     def _stepsAddConfigClicked(self):
         """
         Add a new config step.
         """
         self._model.addConfigStep()
-        self._buildStepsList()
+        self._addStepToModel()
 
     def _stepsAddFitClicked(self):
         """
         Add a new fit step.
         """
         self._model.addFitStep()
-        self._buildStepsList()
+        self._addStepToModel()
+
+    def _addStepToModel(self):
+        step = self._model.getCurrentFitterStep()
+        name = step.getName()
+        item = QtGui.QStandardItem(name)
+        item.setData(step)
+        item.setEditable(False)
+        item.setCheckable(True)
+        item.setCheckState(QtCore.Qt.Unchecked)
+        self._stepsItems.appendRow(item)
+        selectedIndex = self._stepsItems.indexFromItem(item)
+        self._ui.steps_listView.setCurrentIndex(selectedIndex)
 
     def runToStep(self, endStep):
         """
@@ -217,14 +229,12 @@ class GeometricFitWidget(QtWidgets.QWidget):
             fitter.run(fitterSteps[index - 1])
             self._sceneChanged()
         self._model.setCurrentFitterStep(fitter.removeFitterStep(current_step))
-        self._buildStepsList()
+        self._stepsItems.removeRow(self._ui.steps_listView.currentIndex().row())
 
-    def _stepSelectionChanged(self, model_index, old_indecies):
-        print('model index:', model_index)
-        print('old index:', old_indecies)
+    def _stepSelectionChanged(self, new_index, old_index):
+        self._updateFitterStepWidgets()
 
     def _alignment_changed(self):
-        # print('update alignment')
         self._updateAlignWidgets()
 
     def _stepsListItemClicked(self, modelIndex):
@@ -236,13 +246,6 @@ class GeometricFitWidget(QtWidgets.QWidget):
         step = item.data()
         if step != self._model.getCurrentFitterStep():
             self._model.setCurrentFitterStep(step)
-            isAlign, _isConfig, _isFit = self._model.getCurrentFitterStepTypes()
-            if isAlign:
-                print('is align register align handler.')
-                self._ui.basesceneviewerwidget.register_handler(self._align_handler)
-            else:
-                print('unregister align handler.')
-                self._ui.basesceneviewerwidget.unregister_handler(self._align_handler)
             self._updateFitterStepWidgets()
         fitter = self._model.getFitter()
         isInitialConfig = step is fitter.getInitialFitterStepConfig()
@@ -261,7 +264,6 @@ class GeometricFitWidget(QtWidgets.QWidget):
         Fill the graphics list view with the list of graphics for current region/scene
         """
         fitter = self._model.getFitter()
-        self._stepsItems = QtGui.QStandardItemModel()
         selectedIndex = None
         firstStep = True
         fitterSteps = fitter.getFitterSteps()
@@ -279,9 +281,7 @@ class GeometricFitWidget(QtWidgets.QWidget):
             self._stepsItems.appendRow(item)
             if step == self._model.getCurrentFitterStep():
                 selectedIndex = self._stepsItems.indexFromItem(item)
-        self._ui.steps_listView.setModel(self._stepsItems)
         self._ui.steps_listView.setCurrentIndex(selectedIndex)
-        self._ui.steps_listView.show()
         self._updateFitterStepWidgets()
 
     def _refreshStepItem(self, step):
@@ -305,10 +305,10 @@ class GeometricFitWidget(QtWidgets.QWidget):
         current_step = self._model.getCurrentFitterStep()
         isInitialConfig = current_step == fitter.getInitialFitterStepConfig()
         isAlign, isConfig, isFit = self._model.getCurrentFitterStepTypes()
-        self._model.setStateAlign(False)
+        self._ui.basesceneviewerwidget.unregister_handler(self._align_handler)
         if isAlign:
             self._updateAlignWidgets()
-            self._model.setStateAlign(True)
+            self._ui.basesceneviewerwidget.register_handler(self._align_handler)
         elif isConfig:
             self._updateConfigWidgets()
         elif isFit:
