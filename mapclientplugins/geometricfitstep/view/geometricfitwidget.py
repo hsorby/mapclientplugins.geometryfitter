@@ -73,16 +73,14 @@ class GeometricFitWidget(QtWidgets.QWidget):
 
         base_handler = SceneManipulation()
         self._ui.basesceneviewerwidget.register_handler(base_handler)
-        align_handler = ModelAlignment(QtCore.Qt.Key_A)
-        align_handler.set_model(model)
-        self._ui.basesceneviewerwidget.register_handler(align_handler)
+        self._align_handler = ModelAlignment(QtCore.Qt.Key_A)
+        self._align_handler.set_model(model)
         self._ui.basesceneviewerwidget.set_context(model.getContext())
 
         self._model = model
-        self._fitter = self._model.getFitter()
-        self._region = self._fitter.getRegion()
+        self._model.setAlignmentChangeCallback(self._alignment_changed)
+        self._region = model.getFitter().getRegion()
         self._scene = self._region.getScene()
-        self._currentFitterStep = self._fitter.getInitialFitterStepConfig()  # always exists
         self._ui.alignmentsceneviewerwidget.graphicsInitialized.connect(self._graphicsInitialized)
         self._callback = None
         self._setupConfigWidgets()
@@ -155,6 +153,12 @@ class GeometricFitWidget(QtWidgets.QWidget):
         self._ui.done_pushButton.clicked.connect(self._doneButtonClicked)
         self._ui.stdViews_pushButton.clicked.connect(self._stdViewsButtonClicked)
         self._ui.viewAll_pushButton.clicked.connect(self._viewAllButtonClicked)
+        selection_model = self._ui.steps_listView.selectionModel()
+        print(selection_model)
+        print(dir(selection_model.selectionChanged))
+
+        selection_model.selectionChanged[QtCore.QItemSelection, QtCore.QItemSelection].connect(self._stepSelectionChanged)
+        selection_model.currentRowChanged[QtCore.QModelIndex, QtCore.QModelIndex].connect(self._stepSelectionChanged)
 
     def _updateGeneralWidgets(self):
         self._ui.identifier_label.setText("Identifier:  " + self._model.getIdentifier())
@@ -164,33 +168,31 @@ class GeometricFitWidget(QtWidgets.QWidget):
         """
         Add a new align step.
         """
-        self._currentFitterStep = FitterStepAlign()
-        self._fitter.addFitterStep(self._currentFitterStep)  # Future: , lastFitterStep
+        self._model.addAlignStep()
         self._buildStepsList()
 
     def _stepsAddConfigClicked(self):
         """
         Add a new config step.
         """
-        self._currentFitterStep = FitterStepConfig()
-        self._fitter.addFitterStep(self._currentFitterStep)  # Future: , lastFitterStep
+        self._model.addConfigStep()
         self._buildStepsList()
 
     def _stepsAddFitClicked(self):
         """
         Add a new fit step.
         """
-        self._currentFitterStep = FitterStepFit()
-        self._fitter.addFitterStep(self._currentFitterStep)  # Future: , lastFitterStep
+        self._model.addFitStep()
         self._buildStepsList()
 
     def runToStep(self, endStep):
         """
         Run fitter steps up to specified end step.
         """
-        fitterSteps = self._fitter.getFitterSteps()
+        fitter = self._model.getFitter()
+        fitterSteps = fitter.getFitterSteps()
         endIndex = fitterSteps.index(endStep)
-        sceneChanged = self._fitter.run(endStep, self._model.getOutputModelFileNameStem())
+        sceneChanged = fitter.run(endStep, self._model.getOutputModelFileNameStem())
         if sceneChanged:
             for index in range(endIndex + 1, len(fitterSteps)):
                 self._refreshStepItem(fitterSteps[index])
@@ -205,15 +207,25 @@ class GeometricFitWidget(QtWidgets.QWidget):
         Delete the currently selected step, except for initial config.
         Select next step after, or before if none.
         """
-        assert self._currentFitterStep is not self._fitter.getInitialFitterStepConfig()
-        if self._currentFitterStep.hasRun():
+        fitter = self._model.getFitter()
+        current_step = self._model.getCurrentFitterStep()
+        assert current_step is not fitter.getInitialFitterStepConfig()
+        if current_step.hasRun():
             # reload and run to step before current
-            fitterSteps = self._fitter.getFitterSteps()
-            index = fitterSteps.index(self._currentFitterStep)
-            self._fitter.run(fitterSteps[index - 1])
+            fitterSteps = fitter.getFitterSteps()
+            index = fitterSteps.index(current_step)
+            fitter.run(fitterSteps[index - 1])
             self._sceneChanged()
-        self._currentFitterStep = self._fitter.removeFitterStep(self._currentFitterStep)
+        self._model.setCurrentFitterStep(fitter.removeFitterStep(current_step))
         self._buildStepsList()
+
+    def _stepSelectionChanged(self, model_index, old_indecies):
+        print('model index:', model_index)
+        print('old index:', old_indecies)
+
+    def _alignment_changed(self):
+        # print('update alignment')
+        self._updateAlignWidgets()
 
     def _stepsListItemClicked(self, modelIndex):
         """
@@ -222,16 +234,24 @@ class GeometricFitWidget(QtWidgets.QWidget):
         model = modelIndex.model()
         item = model.itemFromIndex(modelIndex)
         step = item.data()
-        if step != self._currentFitterStep:
-            self._currentFitterStep = step
+        if step != self._model.getCurrentFitterStep():
+            self._model.setCurrentFitterStep(step)
+            isAlign, _isConfig, _isFit = self._model.getCurrentFitterStepTypes()
+            if isAlign:
+                print('is align register align handler.')
+                self._ui.basesceneviewerwidget.register_handler(self._align_handler)
+            else:
+                print('unregister align handler.')
+                self._ui.basesceneviewerwidget.unregister_handler(self._align_handler)
             self._updateFitterStepWidgets()
-        isInitialConfig = step is self._fitter.getInitialFitterStepConfig()
+        fitter = self._model.getFitter()
+        isInitialConfig = step is fitter.getInitialFitterStepConfig()
         isChecked = True if isInitialConfig else (item.checkState() == QtCore.Qt.Checked)
         if step.hasRun() != isChecked:
             if isChecked:
                 endStep = step
             else:
-                fitterSteps = self._fitter.getFitterSteps()
+                fitterSteps = fitter.getFitterSteps()
                 index = fitterSteps.index(step)
                 endStep = fitterSteps[index - 1]
             self.runToStep(endStep)
@@ -240,20 +260,13 @@ class GeometricFitWidget(QtWidgets.QWidget):
         """
         Fill the graphics list view with the list of graphics for current region/scene
         """
-        self._stepsItems = QtGui.QStandardItemModel(self._ui.steps_listView)
+        fitter = self._model.getFitter()
+        self._stepsItems = QtGui.QStandardItemModel()
         selectedIndex = None
         firstStep = True
-        fitterSteps = self._fitter.getFitterSteps()
+        fitterSteps = fitter.getFitterSteps()
         for step in fitterSteps:
-            name = None
-            if isinstance(step, FitterStepAlign):
-                name = "Align"
-            elif isinstance(step, FitterStepConfig):
-                name = "Config"
-            elif isinstance(step, FitterStepFit):
-                name = "Fit"
-            else:
-                assert False, "GeometricFitWidget.  Unknown FitterStep type"
+            name = step.getName()
             item = QtGui.QStandardItem(name)
             item.setData(step)
             item.setEditable(False)
@@ -264,7 +277,7 @@ class GeometricFitWidget(QtWidgets.QWidget):
                 item.setCheckable(True)
                 item.setCheckState(QtCore.Qt.Checked if step.hasRun() else QtCore.Qt.Unchecked)
             self._stepsItems.appendRow(item)
-            if step == self._currentFitterStep:
+            if step == self._model.getCurrentFitterStep():
                 selectedIndex = self._stepsItems.indexFromItem(item)
         self._ui.steps_listView.setModel(self._stepsItems)
         self._ui.steps_listView.setCurrentIndex(selectedIndex)
@@ -274,23 +287,24 @@ class GeometricFitWidget(QtWidgets.QWidget):
     def _refreshStepItem(self, step):
         """
         Update check state and selection of step in steps list view.
-        :param stepIndex: Row index of item in step items.
+        :param step: Row index of item in step items.
         """
-        index = self._fitter.getFitterSteps().index(step)
+        fitter = self._model.getFitter()
+        index = fitter.getFitterSteps().index(step)
         item = self._stepsItems.item(index)
-        if step is not self._fitter.getInitialFitterStepConfig():
+        if step is not fitter.getInitialFitterStepConfig():
             item.setCheckState(QtCore.Qt.Checked if step.hasRun() else QtCore.Qt.Unchecked)
-        if step == self._currentFitterStep:
+        if step == self._model.getCurrentFitterStep():
             self._ui.steps_listView.setCurrentIndex(self._stepsItems.indexFromItem(item))
 
     def _updateFitterStepWidgets(self):
         """
         Update and display widgets for currentFitterStep
         """
-        isInitialConfig = self._currentFitterStep == self._fitter.getInitialFitterStepConfig()
-        isAlign = isinstance(self._currentFitterStep, FitterStepAlign)
-        isConfig = isinstance(self._currentFitterStep, FitterStepConfig)
-        isFit = isinstance(self._currentFitterStep, FitterStepFit)
+        fitter = self._model.getFitter()
+        current_step = self._model.getCurrentFitterStep()
+        isInitialConfig = current_step == fitter.getInitialFitterStepConfig()
+        isAlign, isConfig, isFit = self._model.getCurrentFitterStepTypes()
         self._model.setStateAlign(False)
         if isAlign:
             self._updateAlignWidgets()
@@ -519,9 +533,7 @@ class GeometricFitWidget(QtWidgets.QWidget):
         """
         Update and display group setting widgets for currentFitterStep
         """
-        # isAlign = isinstance(self._currentFitterStep, FitterStepAlign)
-        isConfig = isinstance(self._currentFitterStep, FitterStepConfig)
-        isFit = isinstance(self._currentFitterStep, FitterStepFit)
+        _isAlign, isConfig, isFit = self._model.getCurrentFitterStepTypes()
         if isConfig:
             self._updateGroupConfigCentralProjection()
             self._updateGroupConfigDataProportion()
@@ -600,7 +612,7 @@ class GeometricFitWidget(QtWidgets.QWidget):
         config = self._getConfig()
         groupName = self._getGroupSettingsGroupName()
         if config.setGroupCentralProjection(groupName, state == QtCore.Qt.Checked):
-            fitterSteps = self._fitter.getFitterSteps()
+            fitterSteps = self._model.getFitter().getFitterSteps()
             index = fitterSteps.index(config)
             if config.hasRun() and (((index + 1) == len(fitterSteps)) or (not fitterSteps[index + 1].hasRun())):
                 config.run()
@@ -715,23 +727,24 @@ class GeometricFitWidget(QtWidgets.QWidget):
         """
         Set up config widgets and display values from fitter object.
         """
+        fitter = self._model.getFitter()
         self._ui.configModelCoordinates_fieldChooser.setRegion(self._region)
         self._ui.configModelCoordinates_fieldChooser.setNullObjectName("-")
         self._ui.configModelCoordinates_fieldChooser.setConditional(field_is_managed_coordinates)
-        self._ui.configModelCoordinates_fieldChooser.setField(self._fitter.getModelCoordinatesField())
+        self._ui.configModelCoordinates_fieldChooser.setField(fitter.getModelCoordinatesField())
         self._ui.configFibreOrientation_fieldChooser.setRegion(self._region)
         self._ui.configFibreOrientation_fieldChooser.setNullObjectName("-")
         self._ui.configFibreOrientation_fieldChooser.setConditional(field_is_managed_real_1_to_3_components)
-        self._ui.configFibreOrientation_fieldChooser.setField(self._fitter.getFibreField())
+        self._ui.configFibreOrientation_fieldChooser.setField(fitter.getFibreField())
         self._ui.configDataCoordinates_fieldChooser.setRegion(self._region)
         self._ui.configDataCoordinates_fieldChooser.setNullObjectName("-")
         self._ui.configDataCoordinates_fieldChooser.setConditional(field_is_managed_coordinates)
-        self._ui.configDataCoordinates_fieldChooser.setField(self._fitter.getDataCoordinatesField())
+        self._ui.configDataCoordinates_fieldChooser.setField(fitter.getDataCoordinatesField())
         self._ui.configMarkerGroup_fieldChooser.setRegion(self._region)
         self._ui.configMarkerGroup_fieldChooser.setNullObjectName("-")
         self._ui.configMarkerGroup_fieldChooser.setConditional(field_is_managed_group)
-        self._ui.configMarkerGroup_fieldChooser.setField(self._fitter.getMarkerGroup())
-        self._ui.configDiagnosticLevel_spinBox.setValue(self._fitter.getDiagnosticLevel())
+        self._ui.configMarkerGroup_fieldChooser.setField(fitter.getMarkerGroup())
+        self._ui.configDiagnosticLevel_spinBox.setValue(fitter.getDiagnosticLevel())
 
     def _makeConnectionsConfig(self):
         self._ui.configModelCoordinates_fieldChooser.currentIndexChanged.connect(self._configModelCoordinatesFieldChanged)
@@ -741,7 +754,7 @@ class GeometricFitWidget(QtWidgets.QWidget):
         self._ui.configDiagnosticLevel_spinBox.valueChanged.connect(self._configDiagnosticLevelValueChanged)
 
     def _getConfig(self):
-        config = self._currentFitterStep
+        config = self._model.getCurrentFitterStep()
         assert isinstance(config, FitterStepConfig)
         return config
 
@@ -757,14 +770,14 @@ class GeometricFitWidget(QtWidgets.QWidget):
         """
         field = self._ui.configModelCoordinates_fieldChooser.getField()
         if field:
-            self._fitter.setModelCoordinatesField(field)
+            self._model.getFitter().setModelCoordinatesField(field)
             self._model.createGraphics()
 
     def _configFibreOrientationFieldChanged(self, index):
         """
         Callback for change in model coordinates field chooser widget.
         """
-        self._fitter.setFibreField(self._ui.configFibreOrientation_fieldChooser.getField())
+        self._model.getFitter().setFibreField(self._ui.configFibreOrientation_fieldChooser.getField())
 
     def _configDataCoordinatesFieldChanged(self, index):
         """
@@ -772,7 +785,7 @@ class GeometricFitWidget(QtWidgets.QWidget):
         """
         field = self._ui.configDataCoordinates_fieldChooser.getField()
         if field:
-            self._fitter.setDataCoordinatesField(field)
+            self._model.getFitter().setDataCoordinatesField(field)
             self._model.createGraphics()
 
     def _configMarkerGroupChanged(self, index):
@@ -781,11 +794,11 @@ class GeometricFitWidget(QtWidgets.QWidget):
         """
         group = self._ui.configMarkerGroup_fieldChooser.getField()
         if group:
-            self._fitter.setMarkerGroup(group)
+            self._model.getFitter().setMarkerGroup(group)
             self._model.createGraphics()
 
     def _configDiagnosticLevelValueChanged(self, value):
-        self._fitter.setDiagnosticLevel(value)
+        self._model.getFitter().setDiagnosticLevel(value)
 
     # === align widgets ===
 
@@ -797,7 +810,7 @@ class GeometricFitWidget(QtWidgets.QWidget):
         self._ui.alignTranslation_lineEdit.editingFinished.connect(self._alignTranslationEntered)
 
     def _getAlign(self):
-        align = self._currentFitterStep
+        align = self._model.getCurrentFitterStep()
         assert isinstance(align, FitterStepAlign)
         return align
 
@@ -853,8 +866,9 @@ class GeometricFitWidget(QtWidgets.QWidget):
         self._ui.fitUpdateReferenceState_checkBox.clicked.connect(self._fitUpdateReferenceStateClicked)
 
     def _getFit(self):
-        assert isinstance(self._currentFitterStep, FitterStepFit)
-        return self._currentFitterStep
+        fit = self._model.getCurrentFitterStep()
+        assert isinstance(fit, FitterStepFit)
+        return fit
 
     def _updateFitWidgets(self):
         """

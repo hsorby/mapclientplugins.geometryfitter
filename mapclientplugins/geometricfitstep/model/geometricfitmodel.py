@@ -15,6 +15,10 @@ from opencmiss.zinc.node import Node
 from opencmiss.zinc.scenefilter import Scenefilter
 from scaffoldfitter.fitter import Fitter
 from scaffoldfitter.fitterjson import decodeJSONFitterSteps
+from scaffoldfitter.fitterstepalign import FitterStepAlign
+from scaffoldfitter.fitterstepconfig import FitterStepConfig
+from scaffoldfitter.fitterstepfit import FitterStepFit
+
 from mapclientplugins.geometricfitstep.utils.zinc_utils import get_scene_selection_group, create_scene_selection_group, group_add_group_elements, group_add_group_nodes
 
 nodeDerivativeLabels = ["D1", "D2", "D3", "D12", "D13", "D23", "D123"]
@@ -34,6 +38,7 @@ class GeometricFitModel(object):
         self._location = os.path.join(location, identifier)
         self._identifier = identifier
         self._mode_align = False
+        self._align_change_callback = None
         self._initGraphicsModules()
         self._settings = {
             "displayAxes": True,
@@ -120,6 +125,30 @@ class GeometricFitModel(object):
             f.write(self._fitter.encodeSettingsJSON())
         with open(self._getDisplaySettingsFileName(), "w") as f:
             f.write(json.dumps(self._settings, sort_keys=False, indent=4))
+
+    def setAlignmentChangeCallback(self, callback):
+        self._align_change_callback = callback
+
+    def getCurrentFitterStep(self):
+        return self._currentFitterStep
+
+    def setCurrentFitterStep(self, fitter_step):
+        self._currentFitterStep = fitter_step
+
+    def getCurrentFitterStepTypes(self):
+        return isinstance(self._currentFitterStep, FitterStepAlign), isinstance(self._currentFitterStep, FitterStepConfig), isinstance(self._currentFitterStep, FitterStepFit)
+
+    def addAlignStep(self):
+        self._currentFitterStep = FitterStepAlign()
+        self._fitter.addFitterStep(self._currentFitterStep)  # Future: , lastFitterStep
+
+    def addConfigStep(self):
+        self._currentFitterStep = FitterStepConfig()
+        self._fitter.addFitterStep(self._currentFitterStep)  # Future: , lastFitterStep
+
+    def addFitStep(self):
+        self._currentFitterStep = FitterStepFit()
+        self._fitter.addFitterStep(self._currentFitterStep)  # Future: , lastFitterStep
 
     def getOutputModelFileNameStem(self):
         return self._location
@@ -697,18 +726,33 @@ class GeometricFitModel(object):
 
     def rotateModel(self, axis, angle):
         mat1 = axis_angle_to_rotation_matrix(axis, angle)
-        mat2 = euler_to_rotation_matrix(self._alignSettings["euler_angles"])
-        newmat = matrix_mult(mat1, mat2)
-        self._alignSettings["euler_angles"] = rotation_matrix_to_euler(newmat)
-        self._applyAlignSettings()
+        mat2 = euler_to_rotation_matrix(self._currentFitterStep.getRotation())
+        new_mat = matrix_mult(mat2, mat1)
+        euler = rotation_matrix_to_euler(new_mat)
+        # euler = rotation_matrix_to_euler(mat1)
+        # euler.reverse()
+        self._currentFitterStep.setRotation(euler)
+        self._currentFitterStep.run()
+        self._align_change_callback()
+        # self._alignSettings["euler_angles"] = rotation_matrix_to_euler(newmat)
+        # self._applyAlignSettings()
 
     def scaleModel(self, factor):
-        self._alignSettings["scale"] *= factor
-        self._applyAlignSettings()
+        self._currentFitterStep.setScale(self._currentFitterStep.getScale() * factor)
+        # self._currentFitterStep.setScale(factor)
+        self._currentFitterStep.run()
+        self._align_change_callback()
+        # self._alignSettings["scale"] *= factor
+        # self._applyAlignSettings()
 
-    def translateModel(self, relativeOffset):
-        self._alignSettings["offset"] = add(self._alignSettings["offset"], relativeOffset)
-        self._applyAlignSettings()
+    def offsetModel(self, relativeOffset):
+        # print('relative offset:', relativeOffset)
+        self._currentFitterStep.setTranslation(add(self._currentFitterStep.getTranslation(), relativeOffset))
+        # self._currentFitterStep.setTranslation(relativeOffset)
+        self._currentFitterStep.run()
+        self._align_change_callback()
+        # self._alignSettings["offset"] = add(self._currentFitterStep., relativeOffset)
+        # self._applyAlignSettings()
 
     def _autorangeSpectrum(self):
         scene = self.getScene()
